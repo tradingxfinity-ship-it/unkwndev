@@ -47,6 +47,15 @@ export default function Hero() {
     return () => clearInterval(t)
   }, [])
 
+  // One-time robotic welcome — fires after the preloader clears and the
+  // hero entrance settles, so the voice greets the user once.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      sound.speak('welcome!!')
+    }, 4200)
+    return () => clearTimeout(t)
+  }, [])
+
   // Random ambient glitch flicker
   const [ambientFlicker, setAmbientFlicker] = useState(false)
   useEffect(() => {

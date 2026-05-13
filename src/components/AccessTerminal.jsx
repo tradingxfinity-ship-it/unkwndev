@@ -65,6 +65,7 @@ export default function AccessTerminal() {
           setModalOpen(true)
           setSubmitting(false)
           sound.granted()
+          sound.speak('access granted!!')
         }, 600)
       }
     }

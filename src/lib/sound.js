@@ -57,6 +57,15 @@ if (typeof window !== 'undefined') {
   window.addEventListener('pointerdown', arm, { once: true, passive: true })
   window.addEventListener('keydown', arm, { once: true })
   window.addEventListener('touchstart', arm, { once: true, passive: true })
+
+  // Warm up speech synthesis voice list. Chrome loads voices asynchronously
+  // and the first getVoices() call often returns an empty array.
+  if (window.speechSynthesis) {
+    window.speechSynthesis.getVoices()
+    window.speechSynthesis.onvoiceschanged = () => {
+      window.speechSynthesis.getVoices()
+    }
+  }
 }
 
 /**
@@ -192,12 +201,18 @@ export const sound = {
   toggleMute() {
     muted = !muted
     if (masterGain) masterGain.gain.value = muted ? 0 : 0.6
+    if (muted && typeof window !== 'undefined' && window.speechSynthesis) {
+      window.speechSynthesis.cancel()
+    }
     notify()
     return muted
   },
   setMuted(v) {
     muted = !!v
     if (masterGain) masterGain.gain.value = muted ? 0 : 0.6
+    if (muted && typeof window !== 'undefined' && window.speechSynthesis) {
+      window.speechSynthesis.cancel()
+    }
     notify()
   },
   subscribe(cb) {
@@ -346,6 +361,205 @@ export const sound = {
     osc.connect(g).connect(masterGain)
     osc.start(t)
     osc.stop(t + 0.32)
+  },
+
+  /**
+   * Robotic TTS — speaks the given text with stilted, machine-like cadence.
+   * Each word is queued as its own utterance so the browser inserts a small
+   * gap between them, giving the "1980s computer announcement" feel.
+   * Prefers the most synthesized-sounding voices the OS offers.
+   */
+  speak(text) {
+    if (typeof window === 'undefined' || muted) return
+    const synth = window.speechSynthesis
+    if (!synth) return
+    try {
+      synth.cancel()
+
+      const voices = synth.getVoices()
+      // Maximize ROBOTIC character first — Zarvox/Trinoids/Cellos are
+      // pure-synth voices on macOS. Then quirky male voices that still
+      // sound mechanical. Natural-sounding voices are last-resort fallback.
+      const preferred = [
+        'Zarvox', // THE robot voice — top priority
+        'Trinoids',
+        'Cellos',
+        'Bahh',
+        'Bells',
+        'Boing',
+        'Bubbles',
+        'Hysterical',
+        'Deranged',
+        'Junior',
+        'Ralph',
+        'Albert',
+        'Bruce',
+        'Fred',
+        // natural male fallbacks (only if no synth voices exist)
+        'Microsoft David',
+        'Microsoft Mark',
+        'Microsoft Guy',
+        'Google UK English Male',
+        'Google US English Male',
+        'Daniel',
+        'Aaron',
+        'Tom',
+        'Alex',
+      ]
+      let chosen = null
+      for (const name of preferred) {
+        const match = voices.find((v) => v.name.includes(name))
+        if (match) {
+          chosen = match
+          break
+        }
+      }
+      if (!chosen && voices.length) {
+        const FEMALE = /samantha|karen|moira|tessa|allison|ava|susan|victoria|zira|aria|princess/i
+        chosen =
+          voices.find((v) => /en[-_]/i.test(v.lang) && !FEMALE.test(v.name)) ||
+          voices.find((v) => /en[-_]/i.test(v.lang)) ||
+          voices[0]
+      }
+
+      const u = new SpeechSynthesisUtterance(String(text).trim())
+      if (chosen) u.voice = chosen
+      u.pitch = 0.5 // deep, mechanical — but not subterranean
+      u.rate = 0.95 // slightly slow, deliberate cadence
+      u.volume = 1.0
+
+      const c = getCtx()
+
+      // Pre/post chirps — digital square waves, not sines, for synth feel
+      const fireChirp = (startFreq, endFreq, dur = 0.14, intensity = 0.09) => {
+        if (!c || muted) return
+        const t = c.currentTime
+        const osc = c.createOscillator()
+        const g = c.createGain()
+        osc.type = 'square'
+        osc.frequency.setValueAtTime(startFreq, t)
+        osc.frequency.exponentialRampToValueAtTime(endFreq, t + dur)
+        g.gain.setValueAtTime(0.0001, t)
+        g.gain.exponentialRampToValueAtTime(intensity, t + 0.015)
+        g.gain.exponentialRampToValueAtTime(0.0001, t + dur)
+        // lowpass to soften the harsh square edges so it feels friendly
+        const lp = c.createBiquadFilter()
+        lp.type = 'lowpass'
+        lp.frequency.value = 2800
+        osc.connect(g).connect(lp).connect(masterGain)
+        osc.start(t)
+        osc.stop(t + dur + 0.02)
+      }
+
+      const fireBlip = () => {
+        if (!c || muted) return
+        const t = c.currentTime
+        const osc = c.createOscillator()
+        const g = c.createGain()
+        osc.type = 'square'
+        osc.frequency.setValueAtTime(2200 + Math.random() * 1000, t)
+        osc.frequency.exponentialRampToValueAtTime(900 + Math.random() * 400, t + 0.04)
+        g.gain.setValueAtTime(0.0001, t)
+        g.gain.exponentialRampToValueAtTime(0.045, t + 0.005)
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.05)
+        osc.connect(g).connect(masterGain)
+        osc.start(t)
+        osc.stop(t + 0.06)
+      }
+
+      const fireGlitch = () => {
+        if (!c || muted) return
+        const t = c.currentTime
+        const noise = createNoise(c, 0.07)
+        const ng = c.createGain()
+        const bp = c.createBiquadFilter()
+        bp.type = 'bandpass'
+        bp.frequency.value = 1600 + Math.random() * 1600
+        bp.Q.value = 7
+        ng.gain.setValueAtTime(0.0001, t)
+        ng.gain.exponentialRampToValueAtTime(0.07, t + 0.005)
+        ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.07)
+        noise.connect(bp).connect(ng).connect(masterGain)
+        noise.start(t)
+        noise.stop(t + 0.09)
+      }
+
+      // Continuous vocoder-like "carrier" drone that plays under the voice.
+      // This is the trick that makes the whole thing read as ROBOT — a
+      // sustained low-frequency square wave AM-modulated to pulse, layered
+      // under the natural TTS, mimics how a vocoded voice sounds.
+      let carrier = null
+      let carrierGain = null
+      let carrierLfo = null
+      let carrierLfoGain = null
+      const startCarrier = () => {
+        if (!c || muted) return
+        const t = c.currentTime
+        carrier = c.createOscillator()
+        carrier.type = 'square'
+        carrier.frequency.value = 95 // sub-formant — gives that vocoder buzz
+        carrierGain = c.createGain()
+        carrierGain.gain.setValueAtTime(0.0001, t)
+        carrierGain.gain.linearRampToValueAtTime(0.045, t + 0.08)
+        // LFO to pulse the carrier — adds the "syllabic" vocoder feel
+        carrierLfo = c.createOscillator()
+        carrierLfo.type = 'sine'
+        carrierLfo.frequency.value = 7 // 7Hz tremolo
+        carrierLfoGain = c.createGain()
+        carrierLfoGain.gain.value = 0.025
+        carrierLfo.connect(carrierLfoGain).connect(carrierGain.gain)
+        // bandpass softens it so it sits behind the voice
+        const bp = c.createBiquadFilter()
+        bp.type = 'bandpass'
+        bp.frequency.value = 600
+        bp.Q.value = 1.5
+        carrier.connect(bp).connect(carrierGain).connect(masterGain)
+        carrier.start(t)
+        carrierLfo.start(t)
+      }
+      const stopCarrier = () => {
+        if (!c || !carrier) return
+        const t = c.currentTime
+        try {
+          carrierGain.gain.cancelScheduledValues(t)
+          carrierGain.gain.setValueAtTime(carrierGain.gain.value, t)
+          carrierGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.12)
+          carrier.stop(t + 0.15)
+          carrierLfo.stop(t + 0.15)
+        } catch {}
+        carrier = null
+        carrierGain = null
+        carrierLfo = null
+        carrierLfoGain = null
+      }
+
+      // Pre-roll: digital boot chirp + glitch tick
+      fireChirp(500, 1500, 0.18, 0.11)
+      setTimeout(fireGlitch, 90)
+      setTimeout(fireBlip, 140)
+
+      u.onstart = () => {
+        startCarrier()
+        // Word-boundary blips (Chrome/Safari fire onboundary per word)
+        // and a few extra scattered blips for that digital chatter feel.
+        const extra = 3 + Math.floor(Math.random() * 3)
+        for (let i = 0; i < extra; i++) {
+          setTimeout(fireBlip, 200 + Math.random() * 1500)
+        }
+        // Occasional glitch tick during speech
+        setTimeout(fireGlitch, 400 + Math.random() * 600)
+        setTimeout(fireGlitch, 900 + Math.random() * 700)
+      }
+      u.onboundary = () => fireBlip()
+      u.onend = () => {
+        stopCarrier()
+        fireChirp(1400, 700, 0.18, 0.09)
+        setTimeout(fireGlitch, 80)
+      }
+      u.onerror = () => stopCarrier()
+
+      synth.speak(u)
+    } catch {}
   },
 
   /** access granted — soft warm pad chord that resolves and blooms */
