@@ -159,10 +159,12 @@ export default async function handler(req, res) {
     return
   }
 
-  // Fire-and-forget emails. We don't await — the response should be snappy
-  // and email problems shouldn't block the user. Use waitUntil if available
-  // (Vercel) so the runtime doesn't kill the function before sends finish.
-  const emailWork = Promise.allSettled([
+  // Await the email sends so Vercel's runtime doesn't kill the function
+  // before they complete. Adds ~1s to the response, but the frontend
+  // progress animation already covers that gap. Errors from email are
+  // swallowed inside the send helpers — they never throw to here, so
+  // signup success is still reported even if email fails.
+  await Promise.allSettled([
     sendConfirmationEmail({
       email: v.value,
       siteName: SITE_NAME,
@@ -176,20 +178,7 @@ export default async function handler(req, res) {
       siteName: SITE_NAME,
       createdAt: saved.subscriber?.created_at || new Date().toISOString(),
     }),
-  ]).catch((err) => {
-    console.error('[subscribe] email batch threw', err)
-  })
-
-  const waitUntil =
-    res?.socket?.server?.waitUntil ||
-    (typeof globalThis !== 'undefined' && globalThis.waitUntil)
-  if (typeof waitUntil === 'function') {
-    try {
-      waitUntil(emailWork)
-    } catch {
-      /* ignore */
-    }
-  }
+  ])
 
   res.status(200).json({ ok: true })
 }
