@@ -50,6 +50,22 @@ if (typeof window !== 'undefined') {
     getCtx()
     // start ambient drone on first interaction (autoplay-policy safe)
     startAmbient()
+    // Unlock speechSynthesis for iOS Safari + most mobile browsers.
+    // Speaking a near-silent utterance during the gesture flips the
+    // "user-initiated speech" bit, so later speak() calls (which fire
+    // after delays / async work) are allowed to play.
+    if (window.speechSynthesis) {
+      try {
+        const unlock = new SpeechSynthesisUtterance(' ')
+        unlock.volume = 0
+        unlock.rate = 1
+        // cancel any queued junk first — iOS sometimes hangs otherwise
+        window.speechSynthesis.cancel()
+        window.speechSynthesis.speak(unlock)
+      } catch {
+        /* ignore */
+      }
+    }
     window.removeEventListener('pointerdown', arm)
     window.removeEventListener('keydown', arm)
     window.removeEventListener('touchstart', arm)
