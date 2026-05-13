@@ -16,7 +16,7 @@ const HEADLINES = [
   'TRANSMISSION ACTIVE',
 ]
 
-export default function Hero() {
+export default function Hero({ entered = true }) {
   const containerRef = useRef(null)
   const mouseRef = useRef({ x: -9999, y: -9999, active: false })
 
@@ -47,14 +47,16 @@ export default function Hero() {
     return () => clearInterval(t)
   }, [])
 
-  // One-time robotic welcome — fires after the preloader clears and the
-  // hero entrance settles, so the voice greets the user once.
+  // One-time robotic welcome — only fires AFTER the user has clicked the
+  // entry button, the fill-loader has completed, and the gate has cleared
+  // so the hero is actually on-screen.
   useEffect(() => {
+    if (!entered) return
     const t = setTimeout(() => {
       sound.speak('welcome!!')
-    }, 4200)
+    }, 800)
     return () => clearTimeout(t)
-  }, [])
+  }, [entered])
 
   // Random ambient glitch flicker
   const [ambientFlicker, setAmbientFlicker] = useState(false)
