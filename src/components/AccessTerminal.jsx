@@ -14,6 +14,7 @@ const STAGES = [
 
 export default function AccessTerminal() {
   const [email, setEmail] = useState('')
+  const [company, setCompany] = useState('') // honeypot — must stay empty
   const [focus, setFocus] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [stage, setStage] = useState(0)
@@ -22,18 +23,50 @@ export default function AccessTerminal() {
   const [modalOpen, setModalOpen] = useState(false)
   const [err, setErr] = useState('')
   const inputRef = useRef(null)
+  const progressTimerRef = useRef(null)
 
   const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
 
-  function onSubmit(e) {
+  // Maps API error codes to user-facing terminal strings.
+  function errorMessage(code, status) {
+    switch (code) {
+      case 'INVALID_EMAIL':
+        return 'INVALID_SIGNATURE :: VERIFY ADDRESS FORMAT'
+      case 'RATE_LIMITED':
+        return 'CHANNEL THROTTLED :: RETRY IN A MOMENT'
+      case 'FORBIDDEN':
+        return 'TRANSMISSION REJECTED :: INTEGRITY CHECK FAILED'
+      case 'STORAGE_FAILED':
+        return 'NODE OFFLINE :: RELAY UNAVAILABLE'
+      case 'METHOD_NOT_ALLOWED':
+      case 'BAD_REQUEST':
+        return 'MALFORMED PACKET :: REFRESH AND RETRY'
+      default:
+        return status
+          ? `LINK FAILED :: CODE ${status}`
+          : 'LINK FAILED :: NETWORK UNREACHABLE'
+    }
+  }
+
+  function failWithError(message) {
+    if (progressTimerRef.current) {
+      clearTimeout(progressTimerRef.current)
+      progressTimerRef.current = null
+    }
+    setSubmitting(false)
+    setProgress(0)
+    setStage(0)
+    setErr(message)
+    sound.error()
+    inputRef.current?.classList.add('glitch-burst')
+    setTimeout(() => inputRef.current?.classList.remove('glitch-burst'), 450)
+  }
+
+  async function onSubmit(e) {
     e.preventDefault()
     if (submitting || done) return
     if (!valid) {
-      setErr('INVALID_SIGNATURE :: VERIFY ADDRESS FORMAT')
-      sound.error()
-      // shake
-      inputRef.current?.classList.add('glitch-burst')
-      setTimeout(() => inputRef.current?.classList.remove('glitch-burst'), 450)
+      failWithError('INVALID_SIGNATURE :: VERIFY ADDRESS FORMAT')
       return
     }
     setErr('')
@@ -42,35 +75,79 @@ export default function AccessTerminal() {
     setProgress(0)
     sound.submit()
 
+    // Progress animation: climbs to ~90% while the network call is in flight,
+    // then jumps to 100% on success. Keeps the "negotiating cipher / verifying"
+    // theatre while we actually wait on the API.
     let p = 0
     let s = 0
+    const stageCount = STAGES.length - 1
     const tick = () => {
-      p += Math.random() * 7 + 2
-      if (p >= 100) {
-        p = 100
-      }
+      const ceiling = 90 // never auto-pass 90% — that's reserved for the real ack
+      p = Math.min(ceiling, p + Math.random() * 6 + 1.5)
       setProgress(p)
-      const nextStage = Math.min(STAGES.length - 1, Math.floor((p / 100) * (STAGES.length - 1)))
+      const nextStage = Math.min(stageCount - 1, Math.floor((p / 100) * stageCount))
       if (nextStage !== s) {
         s = nextStage
         setStage(s)
         sound.stage()
       }
-      if (p < 100) {
-        setTimeout(tick, 90 + Math.random() * 140)
-      } else {
-        setStage(STAGES.length - 1)
-        setTimeout(() => {
-          setDone(true)
-          setModalOpen(true)
-          setSubmitting(false)
-          sound.granted()
-          sound.speak('access granted!!')
-        }, 600)
+      if (p < ceiling) {
+        progressTimerRef.current = setTimeout(tick, 110 + Math.random() * 160)
       }
     }
-    setTimeout(tick, 220)
+    progressTimerRef.current = setTimeout(tick, 200)
+
+    // Real API call.
+    let res
+    let body = null
+    try {
+      res = await fetch('/api/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          email: email.trim(),
+          source: 'hero',
+          company, // honeypot — bots fill, real users leave blank
+        }),
+      })
+      try {
+        body = await res.json()
+      } catch {
+        body = null
+      }
+    } catch (networkErr) {
+      console.error('[subscribe] network error', networkErr)
+      failWithError(errorMessage(null, null))
+      return
+    }
+
+    if (!res.ok || !body?.ok) {
+      failWithError(errorMessage(body?.error, res.status))
+      return
+    }
+
+    // Success — finish the progress bar with a flourish.
+    if (progressTimerRef.current) {
+      clearTimeout(progressTimerRef.current)
+      progressTimerRef.current = null
+    }
+    setProgress(100)
+    setStage(STAGES.length - 1)
+    setTimeout(() => {
+      setDone(true)
+      setModalOpen(true)
+      setSubmitting(false)
+      sound.granted()
+      sound.speak('access granted!!')
+    }, 500)
   }
+
+  // Cleanup any in-flight progress timer on unmount.
+  useEffect(() => {
+    return () => {
+      if (progressTimerRef.current) clearTimeout(progressTimerRef.current)
+    }
+  }, [])
 
   function closeModal() {
     sound.click()
@@ -102,6 +179,31 @@ export default function AccessTerminal() {
           <span className="pulse-dot" /> REQUEST ACCESS
         </span>
         <span className="opacity-60">PORT&nbsp;:&nbsp;443/TLS</span>
+      </div>
+
+      {/* Honeypot — visually hidden, off-screen, not in tab order. Bots that
+          auto-fill every field will trip this; humans never see it. */}
+      <div
+        aria-hidden="true"
+        style={{
+          position: 'absolute',
+          left: '-10000px',
+          top: 'auto',
+          width: '1px',
+          height: '1px',
+          overflow: 'hidden',
+        }}
+      >
+        <label htmlFor="company">Company</label>
+        <input
+          id="company"
+          name="company"
+          type="text"
+          tabIndex={-1}
+          autoComplete="off"
+          value={company}
+          onChange={(e) => setCompany(e.target.value)}
+        />
       </div>
 
       <AnimatePresence mode="wait" initial={false}>
