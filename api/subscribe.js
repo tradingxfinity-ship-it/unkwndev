@@ -94,24 +94,6 @@ async function readJsonBody(req) {
   })
 }
 
-function serializeResult(r) {
-  if (!r) return null
-  if (r.status === 'fulfilled') {
-    const v = r.value || {}
-    return {
-      status: 'fulfilled',
-      ok: v.ok ?? null,
-      skipped: v.skipped ?? null,
-      id: v.id ?? null,
-      error: v.error ? String(v.error?.message || v.error?.name || v.error) : null,
-    }
-  }
-  return {
-    status: 'rejected',
-    reason: String(r.reason?.message || r.reason || 'unknown'),
-  }
-}
-
 export default async function handler(req, res) {
   setCors(req, res)
 
@@ -182,7 +164,7 @@ export default async function handler(req, res) {
   // progress animation already covers that gap. Errors from email are
   // swallowed inside the send helpers — they never throw to here, so
   // signup success is still reported even if email fails.
-  const emailResults = await Promise.allSettled([
+  await Promise.allSettled([
     sendConfirmationEmail({
       email: v.value,
       siteName: SITE_NAME,
@@ -198,16 +180,5 @@ export default async function handler(req, res) {
     }),
   ])
 
-  // TEMP DEBUG: surface what happened during email send so the frontend
-  // can show it. Remove once email is working in production.
-  const debug = {
-    resendKeyPresent: !!process.env.RESEND_API_KEY,
-    resendKeyPrefix: (process.env.RESEND_API_KEY || '').slice(0, 6),
-    resendFromEmail: process.env.RESEND_FROM_EMAIL || null,
-    adminEmail: process.env.ADMIN_EMAIL || null,
-    confirmation: serializeResult(emailResults[0]),
-    adminNotify: serializeResult(emailResults[1]),
-  }
-
-  res.status(200).json({ ok: true, _debug: debug })
+  res.status(200).json({ ok: true })
 }
